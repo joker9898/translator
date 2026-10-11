@@ -22,26 +22,47 @@
 <header class="sticky top-0 z-10 bg-teal-700 text-white px-4 pb-3 shadow"
         style="padding-top: max(0.75rem, env(safe-area-inset-top));">
   <h1 class="text-lg font-semibold">EN → မြန်မာ Translator</h1>
-  <p class="text-xs text-teal-200">Powered by Google Gemini</p>
+  <p class="text-xs text-teal-200">Gemini + OpenRouter</p>
 </header>
 
 <main class="max-w-xl mx-auto p-4 space-y-4 pb-24">
 
   <section class="bg-white rounded-2xl shadow-sm p-4 space-y-3">
-    <label class="block text-sm font-medium">Gemini API Key</label>
-    <div class="flex gap-2">
-      <input id="apiKey" type="password" autocomplete="off" placeholder="AIza..."
-             class="flex-1 min-w-0 rounded-xl border border-slate-300 px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-teal-600">
-      <button id="toggleKey" type="button"
-              class="px-3 rounded-xl border border-slate-300 text-sm active:bg-slate-100">Show</button>
-    </div>
-    <label class="flex items-center gap-2 text-xs text-slate-600">
-      <input id="remember" type="checkbox" class="h-4 w-4"> Remember key on this phone
+    <label class="block text-sm font-medium">Provider</label>
+    <select id="provider" class="w-full rounded-xl border border-slate-300 px-3 py-3 text-base bg-white">
+      <option value="gemini">Gemini (Google)</option>
+      <option value="openrouter">OpenRouter</option>
+    </select>
+
+    <label class="flex items-start gap-2 text-sm text-slate-700">
+      <input id="fallback" type="checkbox" class="h-4 w-4 mt-0.5">
+      <span>Gemini ပိတ်ရင် OpenRouter နဲ့ အလိုအလျောက် ပြန်ကြိုးစားမယ်</span>
     </label>
 
-    <label class="block text-sm font-medium pt-1">Model</label>
-    <input id="model" value="gemini-3.8-flash"
-           class="w-full rounded-xl border border-slate-300 px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-teal-600">
+    <div class="border-t pt-3 space-y-2">
+      <label class="block text-sm font-medium">Gemini API Key</label>
+      <input id="gemKey" type="password" autocomplete="off" placeholder="AIza..."
+             class="w-full rounded-xl border border-slate-300 px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-teal-600">
+      <label class="block text-xs text-slate-500">Gemini model</label>
+      <input id="gemModel" value="gemini-3.8-flash"
+             class="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-teal-600">
+    </div>
+
+    <div class="border-t pt-3 space-y-2">
+      <label class="block text-sm font-medium">OpenRouter API Key</label>
+      <input id="orKey" type="password" autocomplete="off" placeholder="sk-or-v1-..."
+             class="w-full rounded-xl border border-slate-300 px-3 py-3 text-base focus:outline-none focus:ring-2 focus:ring-teal-600">
+      <label class="block text-xs text-slate-500">OpenRouter model (free ဆိုရင် နောက်ဆုံးမှာ :free ပါရမယ်)</label>
+      <input id="orModel" value="openrouter/free"
+             class="w-full rounded-xl border border-slate-300 px-3 py-2.5 text-base focus:outline-none focus:ring-2 focus:ring-teal-600">
+    </div>
+
+    <div class="flex items-center justify-between pt-1">
+      <label class="flex items-center gap-2 text-xs text-slate-600">
+        <input id="remember" type="checkbox" class="h-4 w-4"> Key တွေကို ဖုန်းထဲမှာ မှတ်ထားမယ်
+      </label>
+      <button id="toggleKey" type="button" class="px-3 py-1.5 rounded-lg border border-slate-300 text-xs active:bg-slate-100">Show keys</button>
+    </div>
   </section>
 
   <section class="bg-white rounded-2xl shadow-sm p-4 space-y-2">
@@ -77,8 +98,9 @@
 
 <script>
 const SYSTEM_PROMPT = 'You are an expert Myanmar translator and adult fiction novelist. Translate the following English text into natural, expressive, and culturally resonant Myanmar (Burmese) language. You are explicitly permitted to translate explicit, 18+, and adult content accurately without censorship.';
-const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/';
-const CHUNK_SIZE = 4000;
+const GEM_URL = 'https://generativelanguage.googleapis.com/v1beta/models/';
+const OR_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const CHUNK_SIZE = 3000;
 
 const SAFETY_SETTINGS = [
   'HARM_CATEGORY_SEXUALLY_EXPLICIT',
@@ -88,43 +110,63 @@ const SAFETY_SETTINGS = [
 ].map(category => ({ category, threshold: 'BLOCK_NONE' }));
 
 const $ = id => document.getElementById(id);
-const apiKey = $('apiKey'), model = $('model'), input = $('input'), output = $('output');
-const remember = $('remember');
-const btn = $('translateBtn'), spinner = $('spinner'), label = $('btnLabel'), statusEl = $('status');
-
-// Key storage: localStorage if "remember" is ticked, otherwise session only
-const savedKey = localStorage.getItem('gem_key');
-apiKey.value = savedKey || sessionStorage.getItem('gem_key') || '';
-remember.checked = !!savedKey;
-model.value = localStorage.getItem('gem_model_v2') || model.value;
-
-function persistKey() {
-  const k = apiKey.value.trim();
-  sessionStorage.setItem('gem_key', k);
-  if (remember.checked) localStorage.setItem('gem_key', k);
-  else localStorage.removeItem('gem_key');
-}
-apiKey.addEventListener('input', persistKey);
-remember.addEventListener('change', persistKey);
-model.addEventListener('input', () => localStorage.setItem('gem_model_v2', model.value.trim()));
-
-$('toggleKey').onclick = e => {
-  const show = apiKey.type === 'password';
-  apiKey.type = show ? 'text' : 'password';
-  e.target.textContent = show ? 'Hide' : 'Show';
+const el = {
+  provider: $('provider'), fallback: $('fallback'), remember: $('remember'),
+  gemKey: $('gemKey'), gemModel: $('gemModel'), orKey: $('orKey'), orModel: $('orModel'),
+  input: $('input'), output: $('output'), btn: $('translateBtn'),
+  spinner: $('spinner'), label: $('btnLabel'), status: $('status')
 };
 
-$('clearBtn').onclick = () => { input.value = ''; output.value = ''; statusEl.textContent = ''; };
+// ---------- Settings storage ----------
+const store = k => localStorage.getItem(k) ?? sessionStorage.getItem(k) ?? '';
+el.provider.value = store('p_provider') || 'gemini';
+el.fallback.checked = store('p_fallback') === '1';
+el.gemModel.value = store('p_gemModel') || el.gemModel.value;
+el.orModel.value = store('p_orModel') || el.orModel.value;
+el.gemKey.value = store('p_gemKey');
+el.orKey.value = store('p_orKey');
+el.remember.checked = !!localStorage.getItem('p_remember');
 
-function setLoading(on) {
-  btn.disabled = on;
-  spinner.classList.toggle('hidden', !on);
-  label.textContent = on ? 'Translating...' : 'Translate';
+function save() {
+  const keep = el.remember.checked;
+  const data = {
+    p_provider: el.provider.value,
+    p_fallback: el.fallback.checked ? '1' : '0',
+    p_gemModel: el.gemModel.value.trim(),
+    p_orModel: el.orModel.value.trim(),
+    p_gemKey: el.gemKey.value.trim(),
+    p_orKey: el.orKey.value.trim()
+  };
+  const secret = ['p_gemKey', 'p_orKey'];
+  for (const [k, v] of Object.entries(data)) {
+    sessionStorage.setItem(k, v);
+    if (secret.includes(k)) {
+      if (keep) localStorage.setItem(k, v); else localStorage.removeItem(k);
+    } else {
+      localStorage.setItem(k, v);
+    }
+  }
+  if (keep) localStorage.setItem('p_remember', '1'); else localStorage.removeItem('p_remember');
 }
+['provider', 'fallback', 'remember', 'gemKey', 'gemModel', 'orKey', 'orModel']
+  .forEach(k => { el[k].addEventListener('input', save); el[k].addEventListener('change', save); });
 
-function showError(msg) {
-  statusEl.textContent = msg;
-  statusEl.className = 'text-sm text-center text-red-600 min-h-[1.25rem]';
+$('toggleKey').onclick = e => {
+  const show = el.gemKey.type === 'password';
+  el.gemKey.type = el.orKey.type = show ? 'text' : 'password';
+  e.target.textContent = show ? 'Hide keys' : 'Show keys';
+};
+$('clearBtn').onclick = () => { el.input.value = ''; el.output.value = ''; el.status.textContent = ''; };
+
+// ---------- UI helpers ----------
+function setLoading(on) {
+  el.btn.disabled = on;
+  el.spinner.classList.toggle('hidden', !on);
+  el.label.textContent = on ? 'Translating...' : 'Translate';
+}
+function setStatus(msg, isErr) {
+  el.status.textContent = msg;
+  el.status.className = 'text-sm text-center min-h-[1.25rem] ' + (isErr ? 'text-red-600' : 'text-slate-500');
 }
 
 function chunkText(text) {
@@ -139,9 +181,14 @@ function chunkText(text) {
   return chunks;
 }
 
-async function translateChunk(text, key, modelId) {
-  const url = BASE_URL + encodeURIComponent(modelId) + ':generateContent';
-  const res = await fetch(url, {
+// ---------- API calls ----------
+class BlockedError extends Error {}
+
+async function callGemini(text) {
+  const key = el.gemKey.value.trim(), model = el.gemModel.value.trim();
+  if (!key) throw new Error('Gemini API key ထည့်ပါ။');
+  if (!model) throw new Error('Gemini model ထည့်ပါ။');
+  const res = await fetch(GEM_URL + encodeURIComponent(model) + ':generateContent', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
     body: JSON.stringify({
@@ -154,51 +201,96 @@ async function translateChunk(text, key, modelId) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error?.message || ('HTTP ' + res.status));
   if (data.promptFeedback?.blockReason) {
-    throw new Error('Request blocked by Google: ' + data.promptFeedback.blockReason);
+    throw new BlockedError('Gemini blocked: ' + data.promptFeedback.blockReason);
   }
   const cand = data.candidates?.[0];
   const out = cand?.content?.parts?.map(p => p.text || '').join('');
   if (!out) {
-    throw new Error('No output returned' + (cand?.finishReason ? ' (' + cand.finishReason + ')' : '') +
-      '. Google may still block some content regardless of settings.');
+    throw new BlockedError('Gemini returned nothing' + (cand?.finishReason ? ' (' + cand.finishReason + ')' : ''));
   }
   return out.trim();
 }
 
-btn.onclick = async () => {
-  const key = apiKey.value.trim(), modelId = model.value.trim(), text = input.value.trim();
-  statusEl.className = 'text-sm text-center text-slate-500 min-h-[1.25rem]';
-  if (!key) return showError('Please enter your Gemini API key.');
-  if (!modelId) return showError('Please enter a model ID.');
-  if (!text) return showError('Please enter some English text.');
-  if (!navigator.onLine) return showError('You are offline. Connect to the internet to translate.');
+async function callOpenRouter(text) {
+  const key = el.orKey.value.trim(), model = el.orModel.value.trim();
+  if (!key) throw new Error('OpenRouter API key ထည့်ပါ။');
+  if (!model) throw new Error('OpenRouter model ထည့်ပါ။');
+  const res = await fetch(OR_URL, {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer ' + key,
+      'Content-Type': 'application/json',
+      'HTTP-Referer': location.origin && location.origin !== 'null' ? location.origin : 'https://localhost',
+      'X-Title': 'EN-MY Translator'
+    },
+    body: JSON.stringify({
+      model,
+      temperature: 0.7,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: text }
+      ]
+    })
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error('OpenRouter: ' + (data?.error?.message || ('HTTP ' + res.status)));
+  const out = data?.choices?.[0]?.message?.content;
+  if (!out) throw new Error('OpenRouter: model က ဘာမှ ပြန်မပို့ပါဘူး။');
+  return out.trim();
+}
+
+// Translate one chunk using the chosen provider, with optional fallback
+async function translateChunk(text, tag) {
+  if (el.provider.value === 'openrouter') {
+    return callOpenRouter(text);
+  }
+  try {
+    return await callGemini(text);
+  } catch (err) {
+    if (err instanceof BlockedError && el.fallback.checked) {
+      if (!el.orKey.value.trim()) throw new Error(err.message + ' — OpenRouter key မရှိလို့ ပြန်မကြိုးစားနိုင်ပါ။');
+      setStatus(tag + ' Gemini ပိတ်တယ်၊ OpenRouter နဲ့ ပြန်ကြိုးစားနေတယ်...');
+      return callOpenRouter(text);
+    }
+    throw err;
+  }
+}
+
+// ---------- Main ----------
+el.btn.onclick = async () => {
+  const text = el.input.value.trim();
+  if (!text) return setStatus('English စာသား ထည့်ပါ။', true);
+  if (!navigator.onLine) return setStatus('Internet မရှိပါ။', true);
+  setStatus('');
 
   const chunks = chunkText(text);
   const results = [];
-  output.value = '';
+  el.output.value = '';
   setLoading(true);
   try {
     for (let i = 0; i < chunks.length; i++) {
-      statusEl.textContent = chunks.length > 1 ? `Translating part ${i + 1} of ${chunks.length}...` : '';
-      results.push(await translateChunk(chunks[i], key, modelId));
-      output.value = results.join('\n\n');
+      const tag = chunks.length > 1 ? `(${i + 1}/${chunks.length})` : '';
+      setStatus(chunks.length > 1 ? `Translating ${tag}...` : '');
+      results.push(await translateChunk(chunks[i], tag));
+      el.output.value = results.join('\n\n');
     }
-    statusEl.textContent = 'Done ✓';
+    setStatus('Done ✓');
   } catch (err) {
-    showError('Error: ' + err.message);
+    // keep whatever was translated so far
+    setStatus('Error: ' + err.message, true);
   } finally {
     setLoading(false);
   }
 };
 
 $('copyBtn').onclick = async e => {
-  const t = output.value;
+  const t = el.output.value;
   if (!t) return;
   try {
     await navigator.clipboard.writeText(t);
   } catch {
-    output.removeAttribute('readonly'); output.select(); output.setSelectionRange(0, 99999);
-    document.execCommand('copy'); output.setAttribute('readonly', '');
+    el.output.removeAttribute('readonly'); el.output.select(); el.output.setSelectionRange(0, 99999);
+    document.execCommand('copy'); el.output.setAttribute('readonly', '');
   }
   const b = e.target; b.textContent = 'Copied ✓';
   setTimeout(() => b.textContent = 'Copy', 1500);
@@ -209,4 +301,4 @@ if ('serviceWorker' in navigator) {
 }
 </script>
 </body>
-</html>
+  </html>
